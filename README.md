@@ -102,4 +102,214 @@ Terraform loads variables in this order:
 **Default → tfvars → custom tfvars → environment → CLI**
 
 When duplicates exist —  The **last defined source (highest priority)** always overwrites the previous ones.
+# Provider 
+A provider in Terraform is the plugin that allows Terraform to connect with a specific platform or service like AWS, Azure, GCP, Kubernetes, etc.
+Sometimes, you may want to use more than one provider in a single Terraform project. This is called a multi-provider setup.
+**Multiple Cloud Providers**
+```hcl
+provider "aws" {
+  region = "ap-south-1"
+}
+
+provider "azurerm" {
+  features {}
+}
+```
+**Multiple Accounts or Regions for the Same Provider**
+```hcl
+provider "aws" {
+  region = "ap-south-1"
+}
+
+provider "aws" {
+  alias  = "us"
+  region = "us-east-1"
+}
+```
+# What Is a Resource Block and Resource Dependencies ?
+
+A resource block defines what you want to create in your infrastructure.
+```hcl resource "aws_instance" "web_server" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t2.micro"
+  tags = {
+    Name = "MyWebServer"
+  }
+}
+```
+Sometimes one resource depends on another.  Exampl You must create a VPC before creating a Subnet and you must create a Subnet before creating an EC2 inside it.
+Terraform automatically handles most dependencies but if you want explicitily metion **depends_on** in resource block.
+The below exmpale first create S3 bucket and then create app server.
+```hcl resource "aws_instance" "app_server" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t2.micro"
+  depends_on    = [aws_s3_bucket.my_bucket]
+}
+```
+# What Is a Data Source ?
+A data source is used to read existing information from the cloud, not to create new resources. In this example first fetch Prod-VPC and th vpc related subnets.
+
+```hcl # --- Get the Prod VPC by Tag ---
+data "aws_vpc" "prod" {
+  filter {
+    name   = "tag:Name"
+    values = ["Prod-VPC"]
+  }
+}
+
+# --- Get All Subnets Inside the Prod VPC ---
+data "aws_subnets" "prod_subnets" {
+  filter {
+    name   = "vpc-id"
+    values = [data.aws_vpc.prod.id]
+  }
+}
+```
+# Terraform State
+Terraform state is a file (terraform.tfstate) that keeps track of everything in the Terraform has created in your cloud. By default terraform is stateless it doesn’t automatically know what already exists in your cloud.
+
+Terrraform state file by default it stores on local where you are executing the project. 
+
+Using Remote Backend in Terraform is a centralized storage (like AWS S3 or Azure Blob) where the state file is stored securely instead of keeping it locally. Also it is useful to share with multiple team members, enable locking to prevent conflicts, and ensure safe, consistent infrastructure management.
+## For AWS
+```bash
+   aws s3 mb s3://my-terraform-state-bucket
+```
+```bash
+   aws dynamodb create-table \
+  --table-name terraform-lock-table \
+  --attribute-definitions AttributeName=LockID,AttributeType=S \
+  --key-schema AttributeName=LockID,KeyType=HASH \
+  --billing-mode PAY_PER_REQUEST
+```
+```hcl terraform {
+  backend "s3" {
+    bucket         = "my-terraform-state-bucket"
+    key            = "prod/terraform.tfstate"
+    region         = "ap-south-1"
+    dynamodb_table = "terraform-lock-table"
+    encrypt        = true
+  }
+}
+```
+## For Azure
+```bash
+az storage account create \
+  --name mytfstateaccount \
+  --resource-group terraform-rg \
+  --location eastus \
+  --sku Standard_LRS
+
+az storage container create \
+  --name tfstate \
+  --account-name mytfstateaccount
+```
+```hcl terraform {
+  backend "azurerm" {
+    resource_group_name  = "terraform-rg"
+    storage_account_name = "mytfstateaccount"
+    container_name       = "tfstate"
+    key                  = "prod.terraform.tfstate"
+  }
+}
+```
+## Meta-Argument in Terraform
+In Terraform, a meta-argument is a special setting that can be used inside any resource block. It controls how Terraform manages that resource — not what the resource is
+
+| Meta Argument  | Purpose                                | Example                               | Use Case                               |
+| -------------- | -------------------------------------- | ------------------------------------- | -------------------------------------- |
+| **depends_on** | Force order between resources          | `depends_on = [aws_s3_bucket.bucket]` | Create one resource only after another |
+| **count**      | Create multiple identical resources    | `count = 3`                           | Launch 3 EC2 servers                   |
+| **for_each**   | Create multiple unique resources       | `for_each = var.instances`            | Different configs for each environment |
+| **provider**   | Select specific provider configuration | `provider = aws.us`                   | Multi-region or multi-account setup    |
+| **lifecycle**  | Control create/destroy/update behavior | `prevent_destroy = true`              | Protect critical resources             |
+```hcl  #############################################
+#  PROVIDERS (Default + Secondary Region)
+#############################################
+
+provider "aws" {
+  region = "ap-south-1"  # Primary region (Mumbai)
+}
+
+provider "aws" {
+  alias  = "us"
+  region = "us-east-1"   # Secondary region (Virginia)
+}
+
+#############################################
+#  SHARED RESOURCE - S3 BUCKET (with lifecycle)
+#############################################
+
+resource "aws_s3_bucket" "logs" {
+  bucket = "company-app-logs-bucket"
+
+  lifecycle {
+    prevent_destroy = true        # Protect from accidental deletion
+    ignore_changes  = [tags]      # Ignore tag changes made manually
+    #create_before_destroy = true # When replacing, create new one first, then delete old
+  }
+
+  tags = {
+    Environment = "prod"
+    Owner       = "DevOps-Team"
+  }
+}
+
+#############################################
+#  LOCAL VALUE - Define Regions for EC2
+#############################################
+
+locals {
+  regions = {
+    india = aws
+    us    = aws.us
+  }
+}
+
+#############################################
+#  EC2 INSTANCES (for_each + count + depends_on)
+#############################################
+
+# Define instance types for different environments
+variable "instance_types" {
+  default = {
+    india = "t2.micro"
+    us    = "t2.small"
+  }
+}
+
+resource "aws_instance" "app_servers" {
+  for_each = local.regions          # Create instances for both regions
+  provider = each.value             # Use correct provider per region
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = var.instance_types[each.key]
+
+  # Create 2 EC2 instances per region
+  count = 2
+
+  # Ensure EC2 creation only after S3 bucket exists
+  depends_on = [aws_s3_bucket.logs]
+
+  lifecycle {
+    create_before_destroy = true    # Avoid downtime during replacements
+  }
+
+  tags = {
+    Name = "app-server-${each.key}-${count.index + 1}"
+    Region = each.key
+  }
+}
+
+#############################################
+#  OUTPUTS
+#############################################
+
+output "s3_bucket_name" {
+  value = aws_s3_bucket.logs.bucket
+}
+
+output "instance_ids" {
+  value = [for instance in aws_instance.app_servers : instance.id]
+}
+```
 
