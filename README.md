@@ -312,4 +312,63 @@ output "instance_ids" {
   value = [for instance in aws_instance.app_servers : instance.id]
 }
 ```
+## Terraform Taint
+Terraform taint is a command used to mark a resource for recreation during the next terraform apply. When something in your infrastructure becomes corrupted, misconfigured, or outdated, you can mark it as tainted so Terraform automatically recreates it in the next terraform apply. After new resource is successfully created, Terraform automatically removes the taint flag from the state file.
+```bash
+terraform taint aws_instance.web
+```
+If you marked something as tainted by mistake, you can remove the taint using:
+```bash
+terraform taint aws_instance.web
+```
+# Terraform debugging
+Debugging is useful when something breaks or doesn’t work as expected and you need to troubleshoot deeply.
+Log levels are ***ERROR***, ***WARN***, ***INFO***, ***DEBUG***,***TRACE***
+```bash
+export TF_LOG=TRACE
+export TF_LOG_PATH=terraform-debug.log
+terraform apply
+```
+# Conditions and Functions in Terraform
+Conditions and functions make Terraform configurations smart and dynamic,   allowing you to perform logic, calculations, or data transformations.
+- Make decisions (if-else logic)
+- Reuse code across environments
+- Format or manipulate values (like strings, lists, maps)
+- Simplify complex resource configurations
+```hcl
+variable "environment" {
+  type = string
+  default = "dev"
+
+  validation {
+    condition     = contains(["dev", "qa", "prod"], var.environment)
+    error_message = "Environment must be one of: dev, qa, or prod."
+  }
+}
+
+variable "instance_count" {
+  type = number
+  default = 2
+
+  validation {
+    condition     = var.instance_count > 0 && var.instance_count <= 5
+    error_message = "Instance count must be between 1 and 5."
+  }
+}
+
+locals {
+  instance_type = var.environment == "prod" ? "t3.large" : "t2.micro"
+}
+
+resource "aws_instance" "web" {
+  count         = var.instance_count
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = local.instance_type
+  tags = {
+    Name = "web-${var.environment}-${count.index + 1}"
+  }
+}
+```
+
+
 
