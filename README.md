@@ -369,6 +369,53 @@ resource "aws_instance" "web" {
   }
 }
 ```
+# Provisioners in Terraform
+Provisioners in Terraform are used to execute scripts or commands on a resource (like a virtual machine) after it is created or before it is destroyed
+Provisioners are used for:
+- Installing packages or software (e.g., installing Nginx or Docker on an EC2)
+- Running configuration scripts
+- Copying files from local to remote machines
+- Performing initial setup commands.
 
+Terraform has two main types of provisioners based on where the execution happens
 
+***Local Provisioner (local-exec)***
 
+Runs the command on the machine where Terraform is executed (your laptop or Jenkins agent).
+Usecase: You want to trigger something locally after infrastructure is deployed
+
+***Remote Provisioner (remote-exec)***
+
+Runs the command on the created resource itself (like inside the EC2 or VM).
+Use case: You want to configure the server right after it’s created — e.g., install packages, configure files.
+
+***Connection block***
+
+The connection block defines how Terraform connects to a remote resource, usually a VM or EC2 instance, so that it can run provisioners like remote-exec or file
+
+```hcl
+resource "aws_instance" "web" {
+  ami           = "ami-0c55b159cbfafe1f0"
+  instance_type = "t2.micro"
+  key_name      = "my-ec2-key"   # This is the key pair name in AWS console
+
+  provisioner "local-exec" {
+    command = "echo EC2 instance ${self.public_ip} created >> instance_log.txt"
+  }
+}
+
+  connection {
+    type        = "ssh"
+    user        = "ec2-user"
+    private_key = file("C:/Users/Raghavendra/my-ec2-key.pem")
+    host        = self.public_ip
+  }
+
+  provisioner "remote-exec" {
+    inline = [
+      "sudo yum install -y nginx",
+      "sudo systemctl start nginx"
+    ]
+  }
+}
+```
